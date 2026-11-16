@@ -1020,18 +1020,15 @@ function createLexer() {
   }
 
   // Fast plain-text scan: one native regex finds the next stop (a special
-  // character, a hard break, or a URL/email hint). If the stop is a special
-  // char or hard break, the text up to it is plain (no URL/email lookahead
-  // can fire before it); if it is a URL/email hint, fall back to the exact
-  // text regex so autolinks and emails are detected byte-exactly.
-  const TEXT_STOP = /[\\<!\[`*_~]| {2,}\n|www\.|:\/\/|mailto:|xmpp:|@/;
+  // character or a hard break). If the run holds a URL/email hint, fall back
+  // to the exact text regex so autolinks and emails are detected byte-exactly.
+  const TEXT_STOP = /[\\<!\[`*_~]| {2,}\n/;
   function inlineTextTok(src) {
     const m = TEXT_STOP.exec(src);
     const end = m ? m.index : src.length;
     if (end > 0) {
-      const c = m ? m[0][0] : '';
-      if (!m || c === '\\' || c === '<' || c === '!' || c === '[' || c === '`' || c === '*' || c === '~' || c === '_' || c === ' ') {
-        const raw = src.slice(0, end);
+      const raw = src.slice(0, end);
+      if (raw.indexOf('www.') === -1 && raw.indexOf('://') === -1 && raw.indexOf('mailto:') === -1 && raw.indexOf('xmpp:') === -1 && raw.indexOf('@') === -1) {
         const inRaw = state.inRawBlock;
         return { type: 'text', raw, text: inRaw ? raw : unescapeEntities(raw), escaped: inRaw };
       }
