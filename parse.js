@@ -1119,7 +1119,7 @@ function createLexer() {
   // Top-level lex: normalise line endings, lex blocks, then fill in every
   // queued inline token list.
   function lex(src) {
-    src = src.replace(T.carriageReturn, '\n');
+    if (src.indexOf('\r') !== -1) src = src.replace(T.carriageReturn, '\n');
     blockTokens(src, tokens);
     for (let i = 0; i < inlineQueue.length; i++) {
       const item = inlineQueue[i];
