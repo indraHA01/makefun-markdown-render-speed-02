@@ -275,11 +275,25 @@ function trimTrailingNewlines(a) {
 }
 
 // Drop trailing blank lines from a block's raw text (keeps at most one \n).
+// Manual backward scan: only the trailing lines are inspected, no split.
 function trimBlankLines(a) {
-  const lines = a.split('\n');
-  let t = lines.length - 1;
-  while (t >= 0 && T.blankLine.test(lines[t])) t--;
-  return lines.length - t <= 2 ? a : lines.slice(0, t + 1).join('\n');
+  let i = a.length;
+  let blankCount = 0;
+  let lastNonBlankEnd = 0;
+  while (i > 0) {
+    const nl = a.lastIndexOf('\n', i - 1);
+    const lineStart = nl === -1 ? 0 : nl + 1;
+    let blank = true;
+    for (let k = lineStart; k < i; k++) {
+      const c = a.charCodeAt(k);
+      if (c !== 32 && c !== 9) { blank = false; break; }
+    }
+    if (!blank) { lastNonBlankEnd = i; break; }
+    blankCount++;
+    if (nl === -1) break;
+    i = nl;
+  }
+  return blankCount <= 1 ? a : a.slice(0, lastNonBlankEnd);
 }
 
 // Normalise a link label for lookup: collapse whitespace, Unicode case-fold.
@@ -335,21 +349,20 @@ function stripTrailing(a, ch) {
 // Scan a masked source for the last index a closer run could start at, for
 // `*` and `_` (em/strong) and `~` (strikethrough). A run counts as a
 // possible closer when the character before it is not blank.
+const CLOSER_RUN = /(\*+|_+|~+)/g;
 function scanClosers(masked) {
   const last = { '*': -1, '_': -1 };
   let lastDel = -1;
-  const n = masked.length;
-  for (let s = 0; s < n; s++) {
-    const r = masked[s];
-    if (r !== '*' && r !== '_' && r !== '~') continue;
+  CLOSER_RUN.lastIndex = 0;
+  let m;
+  while ((m = CLOSER_RUN.exec(masked)) !== null) {
+    const s = m.index;
+    const r = m[0][0];
     const prev = s === 0 ? '\n' : masked[s - 1];
-    let i = s + 1;
-    while (i < n && masked[i] === r) i++;
     if (prev !== ' ' && prev !== '\t' && prev !== '\n' && prev !== '\r' && prev !== '\f') {
       if (r === '~') lastDel = s;
       else last[r] = s;
     }
-    s = i - 1;
   }
   return { last, lastDel };
 }
@@ -464,9 +477,6 @@ function createLexer() {
   }
 
   function lheading(src) {
-    // Gate: a setext underline is a line starting (after <=3 spaces) with
-    // = or -. Without one, this cannot be a setext heading.
-    if (!/\n {0,3}[=-]/.test(src)) return;
     const t = BLOCK.lheading.exec(src);
     if (t) {
       const text = t[1].trim();
@@ -676,18 +686,18 @@ function createLexer() {
       let tok;
       if ((tok = space(src))) {
         src = src.substring(tok.raw.length);
-        const prev = out.at(-1);
+        const prev = out[out.length - 1];
         if (tok.raw.length === 1 && prev !== undefined) prev.raw += '\n';
         else out.push(tok);
         continue;
       }
       if ((tok = code(src))) {
         src = src.substring(tok.raw.length);
-        const prev = out.at(-1);
+        const prev = out[out.length - 1];
         if (prev?.type === 'paragraph' || prev?.type === 'text') {
           prev.raw += (prev.raw.endsWith('\n') ? '' : '\n') + tok.raw;
           prev.text += '\n' + tok.text;
-          inlineQueue.at(-1).src = prev.text;
+          inlineQueue[inlineQueue.length - 1].src = prev.text;
         } else out.push(tok);
         continue;
       }
@@ -699,11 +709,11 @@ function createLexer() {
       if ((tok = html(src))) { src = src.substring(tok.raw.length); out.push(tok); continue; }
       if ((tok = def(src))) {
         src = src.substring(tok.raw.length);
-        const prev = out.at(-1);
+        const prev = out[out.length - 1];
         if (prev?.type === 'paragraph' || prev?.type === 'text') {
           prev.raw += (prev.raw.endsWith('\n') ? '' : '\n') + tok.raw;
           prev.text += '\n' + tok.raw;
-          inlineQueue.at(-1).src = prev.text;
+          inlineQueue[inlineQueue.length - 1].src = prev.text;
         } else {
           if (!tokens.links[tok.tag]) tokens.links[tok.tag] = { href: tok.href, title: tok.title };
           out.push(tok);
@@ -713,12 +723,12 @@ function createLexer() {
       if ((tok = table(src))) { src = src.substring(tok.raw.length); out.push(tok); continue; }
       if ((tok = lheading(src))) { src = src.substring(tok.raw.length); out.push(tok); continue; }
       if (state.top && (tok = paragraph(src))) {
-        const prev = out.at(-1);
+        const prev = out[out.length - 1];
         if (n && prev?.type === 'paragraph') {
           prev.raw += (prev.raw.endsWith('\n') ? '' : '\n') + tok.raw;
           prev.text += '\n' + tok.text;
           inlineQueue.pop();
-          inlineQueue.at(-1).src = prev.text;
+          inlineQueue[inlineQueue.length - 1].src = prev.text;
         } else out.push(tok);
         n = false;
         src = src.substring(tok.raw.length);
@@ -726,12 +736,12 @@ function createLexer() {
       }
       if ((tok = text(src))) {
         src = src.substring(tok.raw.length);
-        const prev = out.at(-1);
+        const prev = out[out.length - 1];
         if (prev?.type === 'text') {
           prev.raw += (prev.raw.endsWith('\n') ? '' : '\n') + tok.raw;
           prev.text += '\n' + tok.text;
           inlineQueue.pop();
-          inlineQueue.at(-1).src = prev.text;
+          inlineQueue[inlineQueue.length - 1].src = prev.text;
         } else out.push(tok);
         continue;
       }
@@ -1041,7 +1051,7 @@ function createLexer() {
     try {
       let masked = src;
       let closers = null;
-      if (src.includes('*') || src.includes('_') || src.includes('~')) {
+      if (/[*_~]/.test(src)) {
         // Nothing to hide (no links, code spans, HTML or backslash escapes)
         // means the source is already its own mask — skip three regex scans.
         masked = (!src.includes('[') && !src.includes('`') && !src.includes('<') && !src.includes('\\')) ? src : maskSrc(src);
@@ -1054,6 +1064,7 @@ function createLexer() {
         let guard = Infinity;
         let e = src;
         let justText = false;
+        let last = out.length ? out[out.length - 1] : undefined;
         while (e) {
           if (e.length < guard) guard = e.length;
           else throw new Error('Infinite loop on byte: ' + e.charCodeAt(0));
@@ -1084,19 +1095,17 @@ function createLexer() {
           if (tok) {
             e = e.substring(tok.raw.length);
             if (tok.type === 'text') {
-              const prev = out.at(-1);
-              if (prev?.type === 'text') { prev.raw += tok.raw; prev.text += tok.text; }
-              else out.push(tok);
-            } else out.push(tok);
+              if (last?.type === 'text') { last.raw += tok.raw; last.text += tok.text; }
+              else { out.push(tok); last = tok; }
+            } else { out.push(tok); last = tok; }
             continue;
           }
           if ((tok = inlineTextTok(e))) {
             e = e.substring(tok.raw.length);
             if (tok.raw.slice(-1) !== '_') prevChar = tok.raw.slice(-1);
             justText = true;
-            const prev = out.at(-1);
-            if (prev?.type === 'text') { prev.raw += tok.raw; prev.text += tok.text; }
-            else out.push(tok);
+            if (last?.type === 'text') { last.raw += tok.raw; last.text += tok.text; }
+            else { out.push(tok); last = tok; }
             continue;
           }
           if (e) throw new Error('Infinite loop on byte: ' + e.charCodeAt(0));
